@@ -1,0 +1,26 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+
+# Virtual env
+.venv/
+venv/
+
+# Output
+output/
+
+# Logs
+logs/
+
+# IDE
+.idea/
+.vscode/
+
+# Environment
+.env
+
+# SQLite
+*.db
+
+# OS
+.DS_Store
