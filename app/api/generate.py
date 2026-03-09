@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
+from typing import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
+from sse_starlette.sse import EventSourceResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +22,8 @@ from app.services.job_service import get_job
 from app.utils.storage import image_url_path
 
 router = APIRouter(tags=["generate"])
+
+_TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
 
 
 def _get_worker(request: Request):
@@ -35,6 +40,66 @@ async def generate_async(
     worker = _get_worker(request)
     job_ids = await create_single_job(session, body, worker)
     return ImageResponse(job_ids=job_ids, status="pending")
+
+
+@router.get("/generate/stream")
+async def stream_generate_progress(
+    request: Request,
+    job_id: list[str] = Query(..., description="One or more job IDs to monitor"),
+    session: AsyncSession = Depends(get_session),
+):
+    """SSE stream for one or more generate job IDs until all reach terminal state."""
+    unique_job_ids = list(dict.fromkeys(job_id))
+
+    # Fail fast if any requested job ID does not exist.
+    checks = [await get_job(session, jid) for jid in unique_job_ids]
+    missing = [jid for jid, detail in zip(unique_job_ids, checks, strict=False) if detail is None]
+    if missing:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Job not found: {', '.join(missing)}",
+        )
+
+    async def event_generator() -> AsyncGenerator[dict, None]:
+        while True:
+            if await request.is_disconnected():
+                break
+
+            # Expire identity map so concurrent worker updates are visible.
+            session.expire_all()
+            details = [await get_job(session, jid) for jid in unique_job_ids]
+
+            if any(d is None for d in details):
+                yield {
+                    "event": "error",
+                    "data": json.dumps({"detail": "Job no longer exists"}),
+                }
+                break
+
+            jobs = [d.model_dump() for d in details if d is not None]
+            total = len(jobs)
+            completed = sum(1 for d in details if d and d.status == "completed")
+            failed = sum(1 for d in details if d and d.status == "failed")
+            cancelled = sum(1 for d in details if d and d.status == "cancelled")
+            terminal = sum(1 for d in details if d and d.status in _TERMINAL_JOB_STATUSES)
+
+            payload = {
+                "total": total,
+                "completed": completed,
+                "failed": failed,
+                "cancelled": cancelled,
+                "pending": total - terminal,
+                "jobs": jobs,
+            }
+            yield {"event": "progress", "data": json.dumps(payload)}
+
+            if terminal == total:
+                yield {"event": "done", "data": json.dumps(payload)}
+                break
+
+            await asyncio.sleep(1.0)
+
+    return EventSourceResponse(event_generator())
 
 
 @router.post("/generate/sync", response_model=ImageResponse)

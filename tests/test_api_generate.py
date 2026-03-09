@@ -1,6 +1,10 @@
 """Tests for generation API endpoints."""
 
 import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.models.job import Job
 
 
 @pytest.mark.asyncio
@@ -75,4 +79,37 @@ async def test_generate_default_values(client, mock_worker):
 @pytest.mark.asyncio
 async def test_serve_image_404_for_missing_job(client):
     resp = await client.get("/jobs/nonexistent-id/image")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_emits_done_for_completed_jobs(client, db_engine):
+    create = await client.post("/generate", json={"prompt": "test", "num_images": 2})
+    assert create.status_code == 200
+    job_ids = create.json()["job_ids"]
+
+    # Mark jobs as completed so the SSE stream terminates immediately.
+    factory = async_sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+    async with factory() as session:
+        result = await session.execute(select(Job).where(Job.id.in_(job_ids)))
+        jobs = result.scalars().all()
+        for job in jobs:
+            job.status = "completed"
+            job.file_path = f"output/images/{job.id}.png"
+        await session.commit()
+
+    resp = await client.get(
+        "/generate/stream",
+        params=[("job_id", job_ids[0]), ("job_id", job_ids[1])],
+    )
+    assert resp.status_code == 200
+    text = resp.text
+    assert "event: progress" in text
+    assert "event: done" in text
+    assert '"completed": 2' in text
+
+
+@pytest.mark.asyncio
+async def test_generate_stream_returns_404_for_unknown_job(client):
+    resp = await client.get("/generate/stream", params={"job_id": "unknown-job"})
     assert resp.status_code == 404

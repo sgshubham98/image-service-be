@@ -163,6 +163,44 @@ All request parameters for `ImageRequest`:
 
 ---
 
+### `GET /generate/stream` — SSE Progress Stream for Single Generate
+
+Stream status updates for one or more job IDs returned by `/generate` until all are terminal.
+
+**Request:**
+```bash
+curl -N "http://localhost:8000/generate/stream?job_id=f47ac10b-58cc-4372-a567-0e02b2c3d479&job_id=a1b2c3d4-5678-9abc-def0-1234567890ab"
+```
+
+**Events:**
+- `progress` — emitted periodically with per-job status and aggregate counters
+- `done` — emitted once when all jobs are in `completed`, `failed`, or `cancelled`
+
+**Example event payload:**
+```json
+{
+  "total": 2,
+  "completed": 1,
+  "failed": 0,
+  "cancelled": 0,
+  "pending": 1,
+  "jobs": [
+    {
+      "id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      "status": "completed",
+      "image_url": "/jobs/f47ac10b-58cc-4372-a567-0e02b2c3d479/image"
+    },
+    {
+      "id": "a1b2c3d4-5678-9abc-def0-1234567890ab",
+      "status": "processing",
+      "image_url": null
+    }
+  ]
+}
+```
+
+---
+
 ### `POST /generate/sync` — Synchronous Generation
 
 Same request body as `/generate`. Blocks until all images are generated (up to 60s timeout).
