@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.config import settings
 from app.models.enums import ImageFormat
@@ -14,6 +14,14 @@ class ImageRequest(BaseModel):
     seed: int | None = Field(default=None, ge=0, le=2**32 - 1)
     num_images: int = Field(default=1, ge=1, le=settings.MAX_IMMEDIATE_IMAGES)
     format: ImageFormat = ImageFormat.PNG
+
+    @field_validator("prompt")
+    @classmethod
+    def check_content_safety(cls, v: str) -> str:
+        from app.utils.moderation import check_prompt
+
+        check_prompt(v)
+        return v
 
     @model_validator(mode="after")
     def validate_resolution(self) -> "ImageRequest":

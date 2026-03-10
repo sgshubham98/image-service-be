@@ -39,5 +39,10 @@ class Settings(BaseSettings):
     # ── Sync generation timeout (seconds) ──
     SYNC_TIMEOUT: float = 60.0
 
+    # ── Content moderation ──
+    MODERATION_ENABLED: bool = True
+    MODERATION_MODEL_ID: str = "google/gemma-3-1b-it"
+    HF_API_TOKEN: str | None = None
+
 
 settings = Settings()
