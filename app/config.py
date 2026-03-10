@@ -39,5 +39,11 @@ class Settings(BaseSettings):
     # ── Sync generation timeout (seconds) ──
     SYNC_TIMEOUT: float = 60.0
 
+    # ── Content moderation ──
+    MODERATION_ENABLED: bool = False
+    MODERATION_API_KEY: str = ""
+    MODERATION_API_URL: str = "https://api.openai.com/v1/moderations"
+    MODERATION_TIMEOUT: float = 10.0
+
 
 settings = Settings()
