@@ -13,6 +13,7 @@ from app.api import batch, generate, health, jobs
 from app.config import settings
 from app.database import init_db
 from app.engine.flux_engine import FluxEngine
+from app.utils.moderation import get_moderation_engine
 from app.utils.storage import ensure_storage_dirs
 from app.worker.gpu_worker import GPUWorker
 
@@ -67,6 +68,11 @@ async def lifespan(app: FastAPI):
     engine.load_model()
     engine.warmup()
     app.state.engine = engine
+
+    # Content moderation engine
+    moderation_engine = get_moderation_engine()
+    moderation_engine.load(settings.MODERATION_MODEL_ID)
+    app.state.moderation_engine = moderation_engine
 
     # GPU worker
     worker = GPUWorker(engine=engine)

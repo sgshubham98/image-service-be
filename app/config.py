@@ -40,7 +40,9 @@ class Settings(BaseSettings):
     SYNC_TIMEOUT: float = 60.0
 
     # ── Content moderation ──
-    MODERATION_ENABLED: bool = False
+    MODERATION_ENABLED: bool = True
+    MODERATION_MODEL_ID: str = "google/gemma-3-1b-it"
+    HF_API_TOKEN: str | None = None
     MODERATION_API_KEY: str = ""
     MODERATION_API_URL: str = "https://api.openai.com/v1/moderations"
     MODERATION_TIMEOUT: float = 10.0
