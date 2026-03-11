@@ -6,6 +6,8 @@ import asyncio
 import csv
 import io
 import json
+import os
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import AsyncGenerator
@@ -137,7 +139,12 @@ async def download_batch_images(
     batch_id: str,
     session: AsyncSession = Depends(get_session),
 ):
-    """Download all completed images in a batch as a ZIP archive."""
+    """Download all completed images in a batch as a ZIP archive.
+
+    Streams the ZIP incrementally so the full archive is never held
+    in memory.  File I/O runs in a thread pool to avoid blocking the
+    async event loop.
+    """
     progress = await get_batch_progress(session, batch_id)
     if not progress:
         raise HTTPException(status_code=404, detail="Batch not found")
@@ -150,22 +157,56 @@ async def download_batch_images(
     if not jobs:
         raise HTTPException(status_code=404, detail="No completed images in this batch")
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for job in jobs:
-            if not job.file_path:
-                continue
-            file_path = Path(job.file_path)
-            if file_path.is_file():
-                zf.write(file_path, file_path.name)
-    buf.seek(0)
+    # Collect valid file paths up-front (lightweight check).
+    file_entries: list[tuple[str, Path]] = []
+    for job in jobs:
+        if not job.file_path:
+            continue
+        fp = Path(job.file_path)
+        if fp.is_file():
+            file_entries.append((fp.name, fp))
+
+    if not file_entries:
+        raise HTTPException(status_code=404, detail="No image files found on disk")
 
     batch_name = progress.get("name") or batch_id[:12]
-    safe_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in batch_name).strip()
+    safe_name = "".join(
+        c if c.isalnum() or c in (" ", "-", "_") else "_" for c in batch_name
+    ).strip()
     filename = f"{safe_name}.zip"
 
+    async def _stream_zip() -> AsyncGenerator[bytes, None]:
+        """Build a valid ZIP in a temp file (off the event loop), then
+        stream it in chunks so memory stays flat."""
+        loop = asyncio.get_running_loop()
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".zip")
+        os.close(tmp_fd)
+
+        def _build_zip() -> None:
+            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as zf:
+                for arc_name, file_path in file_entries:
+                    zf.write(str(file_path), arc_name)
+
+        try:
+            # Build the ZIP in a worker thread — no event-loop blocking.
+            await loop.run_in_executor(None, _build_zip)
+
+            # Stream the temp file in 256 KB chunks.
+            chunk_size = 256 * 1024
+            with open(tmp_path, "rb") as f:
+                while True:
+                    chunk = await loop.run_in_executor(None, f.read, chunk_size)
+                    if not chunk:
+                        break
+                    yield chunk
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
     return StreamingResponse(
-        buf,
+        _stream_zip(),
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
