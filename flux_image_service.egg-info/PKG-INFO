@@ -18,6 +18,7 @@ Requires-Dist: protobuf>=4.25.0
 Requires-Dist: Pillow>=10.0.0
 Requires-Dist: python-multipart>=0.0.9
 Requires-Dist: sse-starlette>=2.0.0
+Requires-Dist: httpx>=0.27.0
 Provides-Extra: dev
 Requires-Dist: pytest>=8.0; extra == "dev"
 Requires-Dist: pytest-asyncio>=0.23.0; extra == "dev"

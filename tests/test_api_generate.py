@@ -1,10 +1,12 @@
 """Tests for generation API endpoints."""
 
 import pytest
+from unittest.mock import AsyncMock, patch
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models.job import Job
+from app.services.moderation_service import ModerationError
 
 
 @pytest.mark.asyncio
@@ -113,3 +115,72 @@ async def test_generate_stream_emits_done_for_completed_jobs(client, db_engine):
 async def test_generate_stream_returns_404_for_unknown_job(client):
     resp = await client.get("/generate/stream", params={"job_id": "unknown-job"})
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Content moderation integration tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_async_blocked_when_prompt_is_unsafe(client):
+    """POST /generate returns 400 when the moderation service flags the prompt."""
+    with patch(
+        "app.api.generate.check_prompt_safety",
+        new=AsyncMock(return_value=(False, "sexual")),
+    ):
+        resp = await client.post("/generate", json={"prompt": "explicit content"})
+
+    assert resp.status_code == 400
+    assert "unsafe" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_async_proceeds_when_prompt_is_safe(client, mock_worker):
+    """POST /generate proceeds normally when the moderation service approves the prompt."""
+    with patch(
+        "app.api.generate.check_prompt_safety",
+        new=AsyncMock(return_value=(True, None)),
+    ):
+        resp = await client.post("/generate", json={"prompt": "a beautiful landscape"})
+
+    assert resp.status_code == 200
+    assert "job_ids" in resp.json()
+    mock_worker.enqueue.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_async_returns_503_when_moderation_service_fails(client):
+    """POST /generate returns 503 when the moderation API is unreachable."""
+    with patch(
+        "app.api.generate.check_prompt_safety",
+        new=AsyncMock(side_effect=ModerationError("API unreachable")),
+    ):
+        resp = await client.post("/generate", json={"prompt": "a beautiful landscape"})
+
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_generate_sync_blocked_when_prompt_is_unsafe(client):
+    """POST /generate/sync returns 400 when the moderation service flags the prompt."""
+    with patch(
+        "app.api.generate.check_prompt_safety",
+        new=AsyncMock(return_value=(False, "violence")),
+    ):
+        resp = await client.post("/generate/sync", json={"prompt": "violent content"})
+
+    assert resp.status_code == 400
+    assert "unsafe" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_sync_returns_503_when_moderation_service_fails(client):
+    """POST /generate/sync returns 503 when the moderation API is unreachable."""
+    with patch(
+        "app.api.generate.check_prompt_safety",
+        new=AsyncMock(side_effect=ModerationError("timeout")),
+    ):
+        resp = await client.post("/generate/sync", json={"prompt": "a sunset"})
+
+    assert resp.status_code == 503

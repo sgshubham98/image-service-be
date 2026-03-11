@@ -22,6 +22,7 @@ app/schemas/job.py
 app/services/__init__.py
 app/services/generation_service.py
 app/services/job_service.py
+app/services/moderation_service.py
 app/utils/__init__.py
 app/utils/image_utils.py
 app/utils/moderation.py
@@ -37,5 +38,6 @@ tests/test_api_batch.py
 tests/test_api_generate.py
 tests/test_api_jobs.py
 tests/test_moderation.py
+tests/test_moderation_service.py
 tests/test_schemas.py
 tests/test_worker.py
