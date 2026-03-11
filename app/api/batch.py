@@ -6,13 +6,18 @@ import asyncio
 import csv
 import io
 import json
+import zipfile
+from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
+from fastapi.responses import StreamingResponse
 from sse_starlette.sse import EventSourceResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
+from app.models.job import Job
 from app.models.enums import ImageFormat
 from app.schemas.batch import BatchProgress, BatchRequest
 from app.schemas.generate import ImageRequest
@@ -125,6 +130,45 @@ async def stream_batch_progress(
             await asyncio.sleep(2)
 
     return EventSourceResponse(event_generator())
+
+
+@router.get("/{batch_id}/download")
+async def download_batch_images(
+    batch_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    """Download all completed images in a batch as a ZIP archive."""
+    progress = await get_batch_progress(session, batch_id)
+    if not progress:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    result = await session.execute(
+        select(Job).where(Job.batch_id == batch_id, Job.status == "completed")
+    )
+    jobs = result.scalars().all()
+
+    if not jobs:
+        raise HTTPException(status_code=404, detail="No completed images in this batch")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for job in jobs:
+            if not job.file_path:
+                continue
+            file_path = Path(job.file_path)
+            if file_path.is_file():
+                zf.write(file_path, file_path.name)
+    buf.seek(0)
+
+    batch_name = progress.get("name") or batch_id[:12]
+    safe_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in batch_name).strip()
+    filename = f"{safe_name}.zip"
+
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.delete("/{batch_id}", response_model=BatchProgress)
