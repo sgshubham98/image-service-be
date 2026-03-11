@@ -19,6 +19,7 @@ from app.models.job import Job
 from app.schemas.generate import ImageRequest, ImageResponse
 from app.services.generation_service import create_single_job
 from app.services.job_service import get_job
+from app.services.moderation_service import ModerationError, check_prompt_safety
 from app.utils.storage import image_url_path
 
 router = APIRouter(tags=["generate"])
@@ -37,6 +38,16 @@ async def generate_async(
     session: AsyncSession = Depends(get_session),
 ):
     """Submit an image generation request (1–4 images). Returns immediately with job IDs."""
+    try:
+        is_safe, reason = await check_prompt_safety(body.prompt)
+    except ModerationError:
+        raise HTTPException(status_code=503, detail="Content moderation service unavailable")
+    if not is_safe:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Prompt contains unsafe or explicit content: {reason}",
+        )
+
     worker = _get_worker(request)
     job_ids = await create_single_job(session, body, worker)
     return ImageResponse(job_ids=job_ids, status="pending")
@@ -109,6 +120,16 @@ async def generate_sync(
     session: AsyncSession = Depends(get_session),
 ):
     """Submit and wait for image(s) to be generated (up to SYNC_TIMEOUT seconds)."""
+    try:
+        is_safe, reason = await check_prompt_safety(body.prompt)
+    except ModerationError:
+        raise HTTPException(status_code=503, detail="Content moderation service unavailable")
+    if not is_safe:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Prompt contains unsafe or explicit content: {reason}",
+        )
+
     worker = _get_worker(request)
     job_ids = await create_single_job(session, body, worker)
 
